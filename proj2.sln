@@ -1,25 +1,326 @@
 ﻿
-Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio Version 17
-VisualStudioVersion = 17.7.34031.279
-MinimumVisualStudioVersion = 10.0.40219.1
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "proj2", "proj2.vcxproj", "{816E3640-452C-4E00-9CFD-3924EC84F304}"
-EndProject
-Global
-	GlobalSection(SolutionConfigurationPlatforms) = preSolution
-		Debug|x64 = Debug|x64
-		Release|x64 = Release|x64
-	EndGlobalSection
-	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{816E3640-452C-4E00-9CFD-3924EC84F304}.Debug|x64.ActiveCfg = Debug|x64
-		{816E3640-452C-4E00-9CFD-3924EC84F304}.Debug|x64.Build.0 = Debug|x64
-		{816E3640-452C-4E00-9CFD-3924EC84F304}.Release|x64.ActiveCfg = Release|x64
-		{816E3640-452C-4E00-9CFD-3924EC84F304}.Release|x64.Build.0 = Release|x64
-	EndGlobalSection
-	GlobalSection(SolutionProperties) = preSolution
-		HideSolutionNode = FALSE
-	EndGlobalSection
-	GlobalSection(ExtensibilityGlobals) = postSolution
-		SolutionGuid = {178FA519-1C5B-466D-B3E6-B4D4F635C8C9}
-	EndGlobalSection
-EndGlobal
+#include "cuda_runtime.h"
+#include "device_launch_parameters.h"
+#include <stdio.h>
+#include <chrono>
+#include <iostream>  
+#include <iomanip>   
+#include <string>    
+#include <vector>
+#include <fstream> 
+#include <math_constants.h>
+#include <cmath>
+#include <device_functions.h>
+
+// Prototypes updated to accept the results file stream 
+cudaError_t addWithCuda_double(std::ofstream& resultsFile, double* c, const double* a, const double* b, unsigned int N);
+cudaError_t addWithCuda_float(std::ofstream& resultsFile, float* c, const float* a, const float* b, unsigned int N);
+
+// --- KERNELS ---
+
+__global__ void addKernel_double(double* c, const double* a, const double* b, int N, int j, int k)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int totalThreads = blockDim.x * gridDim.x;
+
+    for (int elem = 0; elem < j; elem++) {
+        int i = idx + elem * totalThreads;
+        if (i < N) {
+            double val_a = a[i];
+            double val_b = b[i];
+            double res = val_a + val_b; //1 op
+
+            for (int loop = 0; loop < k; loop++) {
+                res *= cosf(sinf(loop* 0.01f));
+
+            }
+
+            c[i] = res;
+        }
+    }
+}
+
+
+
+__global__ void addKernel_float(float* c, const float* a, const float* b, int N, int j, int k)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int totalThreads = blockDim.x * gridDim.x;
+
+    for (int elem = 0; elem < j; elem++) {
+        int i = idx + elem * totalThreads;
+        if (i < N) {
+            float val_a = a[i];
+            float val_b = b[i];
+            float res = val_a + val_b;//1 op
+
+            for (int loop = 0; loop < k; loop++) {
+                res *= cosf(sinf(loop * 0.01f));
+
+
+            }
+
+            c[i] = res;
+        }
+    }
+}
+
+// --- MAIN ---
+
+int main()
+{
+    
+    std::ofstream resultsFile("gpu_benchmarks.csv");
+    resultsFile << "Datatype,Size,Mapping_j,Intensity_k,Threads,Time_us,BW_GBs,GOPS,ComputeIntensity\n";
+
+    cudaDeviceProp prop;
+    cudaGetDeviceProperties(&prop, 0);
+
+    double memoryBandwidth =
+        2.0 * prop.memoryClockRate * (prop.memoryBusWidth / 8) / 1e6; // GB/s
+
+    double fp32_throughput =
+        prop.multiProcessorCount *
+        prop.maxThreadsPerMultiProcessor *
+        prop.clockRate * 2.0 / 1e6; // GFLOPS approx
+
+    double fp64_throughput = fp32_throughput / 2.0; // dipende dalla GPU
+
+    std::cout << "========== GPU DEVICE INFO ==========\n";
+
+    std::cout << "Device name: " << prop.name << "\n";
+
+    std::cout << "Compute capability: "
+        << prop.major << "." << prop.minor << "\n";
+
+    std::cout << "Max Threads per block: "
+        << prop.maxThreadsPerBlock << "\n";
+
+    std::cout << "Max Threads per Multiprocessor: "
+        << prop.maxThreadsPerMultiProcessor << "\n";
+
+    std::cout << "Shared Memory per block: "
+        << prop.sharedMemPerBlock / 1024.0 << " KB\n";
+
+    std::cout << "Shared Memory per Multiprocessor: "
+        << prop.sharedMemPerMultiprocessor / 1024.0 << " KB\n";
+
+    std::cout << "Registers per Block: "
+        << prop.regsPerBlock << "\n";
+
+    std::cout << "Registers per Multiprocessor: "
+        << prop.regsPerMultiprocessor << "\n";
+
+    std::cout << "Max Grid Size: "
+        << prop.maxGridSize[0] << ", "
+        << prop.maxGridSize[1] << ", "
+        << prop.maxGridSize[2] << "\n";
+
+    std::cout << "Max Block Dimensions: "
+        << prop.maxThreadsDim[0] << ", "
+        << prop.maxThreadsDim[1] << ", "
+        << prop.maxThreadsDim[2] << "\n";
+
+    std::cout << "Single precision FLOP/s (approx): "
+        << fp32_throughput << " GFLOPS\n";
+
+    std::cout << "Double precision FLOP/s (approx): "
+        << fp64_throughput << " GFLOPS\n";
+
+    std::cout << "#Multiprocessors (SM): "
+        << prop.multiProcessorCount << "\n";
+
+    std::cout << "Processor Clock Rate: "
+        << prop.clockRate / 1000.0 << " MHz\n";
+
+    std::cout << "Threads per Warp: "
+        << prop.warpSize << "\n";
+
+    std::cout << "Global Memory Bandwidth: "
+        << memoryBandwidth << " GB/s\n";
+
+    std::cout << "Global Memory Size: "
+        << prop.totalGlobalMem / (1024.0 * 1024 * 1024)
+        << " GB\n";
+
+    std::cout << "Constant Memory Size: "
+        << prop.totalConstMem / 1024.0
+        << " KB\n";
+
+    std::cout << "L2 Cache Size: "
+        << prop.l2CacheSize / 1024.0
+        << " KB\n";
+
+    std::cout << "Memory Clock Rate: "
+        << prop.memoryClockRate / 1000.0
+        << " MHz\n";
+
+    std::cout << "=====================================\n";
+
+    // Automated sizes from report [cite: 37, 165]
+    std::vector<int> sizes{ 128, 512, 4096, 32768, 65536, 262144, 1048576, 2097152, 4194304, 8388608, 16777216 };
+    //2097152, 4194304, 8388608, 16777216
+    //std::vector<int> sizes{67108864, 134217728 };
+
+    for (int arraySize : sizes) {
+        std::vector<double> a(arraySize), b(arraySize), c(arraySize, 0.0);
+        std::vector<float> a2(arraySize), b2(arraySize), c2(arraySize, 0.0f);
+
+        
+        for (int i = 0; i < arraySize; ++i) {
+            a2[i] = i *0.0001f; b2[i] = i * 0.0002f;
+            a[i] = i * 0.0001;   b[i] = i * 0.0002;
+        }
+
+        std::cout << "\nSize of array: " << arraySize << "\n";
+        addWithCuda_double(resultsFile, c.data(), a.data(), b.data(), arraySize);
+        addWithCuda_float(resultsFile, c2.data(), a2.data(), b2.data(), arraySize);
+    }
+
+    resultsFile.close();
+    return 0;
+}
+
+
+cudaError_t addWithCuda_float(std::ofstream& resultsFile, float* c, const float* a, const float* b, unsigned int size)
+{
+    
+    std::vector<int> j_values = { 1, 4, 16, 32, 64, 256, 512};
+    std::vector<int> k_values = { 1, 10, 100, 1000, 10000, 100000 };
+
+    float* dev_a, * dev_b, * dev_c;
+    cudaMalloc(&dev_c, size * sizeof(float));
+    cudaMalloc(&dev_a, size * sizeof(float));
+    cudaMalloc(&dev_b, size * sizeof(float));
+
+    cudaMemcpy(dev_a, a, size * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(dev_b, b, size * sizeof(float), cudaMemcpyHostToDevice);
+
+    size_t thread_counts[] = { 64 };
+    size_t trials = 10; // Averaged over 10 repetitions 
+
+    std::cout << "\n CASE: float \n";
+    for (int j : j_values) {
+        for (int k : k_values) {
+            for (int t : thread_counts) {
+                dim3 thread_size(t);
+                //dim3 block_size((size + t - 1) / t);
+                dim3 block_size((size + (t * j) - 1) / (t * j)); // Dynamic grid for parameter j 
+                //dim3 block_size(65535);
+
+            
+
+                cudaEvent_t start, stop;
+                cudaEventCreate(&start);
+                cudaEventCreate(&stop);
+
+                //warmup
+                addKernel_float << <block_size, thread_size >> > (dev_c, dev_a, dev_b, size, j, k);
+                cudaDeviceSynchronize();
+
+                cudaEventRecord(start);
+
+                //auto start = std::chrono::high_resolution_clock::now();
+                for (int i = 0; i < trials; i++) {
+                    addKernel_float << <block_size, thread_size >> > (dev_c, dev_a, dev_b, size, j, k);
+                }
+
+                cudaEventRecord(stop);
+                cudaEventSynchronize(stop);
+                //cudaDeviceSynchronize();
+                //auto end = std::chrono::high_resolution_clock::now();
+
+                //double time = std::chrono::duration<double>(end - start).count() / (double)trials;
+                float ms = 0.0f;
+                cudaEventElapsedTime(&ms, start, stop);
+                double time = (ms / 1000.0) / trials;
+
+                double bytes_moved = 3.0 * size * sizeof(float);
+                double operations = (float)size * k;
+                double ci = operations / bytes_moved; // X-axis for Roofline 
+                double bw = (bytes_moved / 1e9) / time; // Memory performance 
+                double gops = (operations / 1e9) / time; // Compute performance
+
+                // saving into CSV file
+                resultsFile << "float," << size << "," << j << "," << k << "," << t << ","
+                    << time * 1e6 << "," << bw << "," << gops << "," << ci << "\n";
+
+                cudaEventDestroy(start);
+                cudaEventDestroy(stop);
+            }
+        }
+    }
+    cudaMemcpy(c, dev_c, size * sizeof(float), cudaMemcpyDeviceToHost);
+    cudaFree(dev_c); cudaFree(dev_a); cudaFree(dev_b);
+    return cudaSuccess;
+}
+
+cudaError_t addWithCuda_double(std::ofstream& resultsFile, double* c, const double* a, const double* b, unsigned int size)
+{
+    std::vector<int> j_values = { 1, 4, 16, 32, 64, 256, 512 };
+    std::vector<int> k_values = { 1, 10, 100, 1000, 10000, 100000 };
+    double* dev_a, * dev_b, * dev_c;
+    cudaMalloc(&dev_c, size * sizeof(double));
+    cudaMalloc(&dev_a, size * sizeof(double));
+    cudaMalloc(&dev_b, size * sizeof(double));
+
+    cudaMemcpy(dev_a, a, size * sizeof(double), cudaMemcpyHostToDevice);
+    cudaMemcpy(dev_b, b, size * sizeof(double), cudaMemcpyHostToDevice);
+
+    size_t thread_counts[] = { 64 };
+    size_t trials = 10;
+
+    std::cout << "\n CASE: double \n";
+    for (int j : j_values) {
+        for (int k : k_values) {
+            for (int t : thread_counts) {
+                dim3 thread_size(t);
+                //dim3 block_size((size + t - 1) / t);
+                dim3 block_size((size + (t * j) - 1) / (t * j));
+                //dim3 block_size(65535);
+
+                
+
+                cudaEvent_t start, stop;
+                cudaEventCreate(&start);
+                cudaEventCreate(&stop);
+
+                //warmup
+                addKernel_double << <block_size, thread_size >> > (dev_c, dev_a, dev_b, size, j, k);
+                cudaDeviceSynchronize();
+
+                cudaEventRecord(start);
+
+                //auto start = std::chrono::high_resolution_clock::now();
+                for (int i = 0; i < trials; i++) {
+                    addKernel_double << <block_size, thread_size >> > (dev_c, dev_a, dev_b, size, j, k);
+                }
+
+                cudaEventRecord(stop);
+                cudaEventSynchronize(stop);
+                //auto end = std::chrono::high_resolution_clock::now();
+
+                //double time = std::chrono::duration<double>(end - start).count() / (double)trials;
+                float ms = 0.0f;
+                cudaEventElapsedTime(&ms, start, stop);
+                double time = (ms / 1000.0) / trials;
+
+                double bytes_moved = 3.0 * size * sizeof(double);
+                double operations = (double)size *k;
+                double ci = operations / bytes_moved;
+                double bw = (bytes_moved / 1e9) / time;
+                double gops = (operations / 1e9) / time;
+
+                resultsFile << "double," << size << "," << j << "," << k << "," << t << ","
+                    << time * 1e6 << "," << bw << "," << gops << "," << ci << "\n";
+
+                cudaEventDestroy(start);
+                cudaEventDestroy(stop);
+            }
+        }
+    }
+
+    cudaMemcpy(c, dev_c, size * sizeof(double), cudaMemcpyDeviceToHost);
+    cudaFree(dev_c); cudaFree(dev_a); cudaFree(dev_b);
+    return cudaSuccess;
+}
